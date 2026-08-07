@@ -1,30 +1,47 @@
+import mongoose from "mongoose";
 import Post from "../models/post.js";
 import Comment from "../models/comment.js";
-import { formatPost, formatPostsArray } from "../utils/formatPost.js";
-import { sendResponse } from "../utils/responseHelper.js";
 import { AppError } from "../utils/AppError.js";
-import mongoose from "mongoose";
+import cloudinary from "../config/cloudinary.js";
+import { sendResponse } from "../utils/responseHelper.js";
+import { formatPost, formatPostsArray } from "../utils/formatPost.js";
 
 // @desc Create a new post with optional image
 // @route POST /api/posts
 // @access Private
 export const createPost = async (req, res, next) => {
+  const { content, images = [] } = req.body;
+  let postSaved = false;
+
   try {
-    const { content, images } = req.body;
     const userId = req.user._id;
 
-    const newPost = new Post({
+    if (images.length > 5) {
+      throw new AppError("A post can have a maximum of 5 images", 400);
+    }
+
+    const post = new Post({
       content: content || "",
-      images: images || [],
+      images,
       author: userId,
     });
 
-    await newPost.save();
+    await post.save();
 
-    const formattedPost = formatPost(newPost, userId);
+    postSaved = true;
+
+    await post.populate("author", "username profilePic");
+
+    const formattedPost = formatPost(post, userId);
 
     sendResponse(res, 201, "Post created", { post: formattedPost });
   } catch (err) {
+    // Remove newly uploaded images if post creation fails
+    if (!postSaved && images.length > 0) {
+      await Promise.allSettled(
+        images.map((image) => cloudinary.uploader.destroy(image.publicId)),
+      );
+    }
     console.error("Error in createPost:", err);
     next(err);
   }
@@ -57,23 +74,20 @@ export const getAllPosts = async (req, res, next) => {
 // @access Private
 export const getPostById = async (req, res, next) => {
   try {
-    const { postId } = req.params;
     const userId = req.user._id;
+    const post = req.resource;
+    // const postId = req.resource._id;
 
-    if (!mongoose.Types.ObjectId.isValid(postId)) {
-      return next(new AppError("Invalid post ID", 400));
-    }
-
-    const post = await Post.findById(postId)
-      .populate("author", "username profilePic")
-      .populate({
+    await post.populate([
+      { path: "author", select: "username profilePic" },
+      {
         path: "comments",
-        populate: { path: "author", select: "username profilePic" },
-      });
-
-    if (!post) {
-      return next(new AppError("Post not found", 404));
-    }
+        populate: {
+          path: "author",
+          select: "username profilePic",
+        },
+      },
+    ]);
 
     const formattedPost = formatPost(post, userId);
 
@@ -91,22 +105,15 @@ export const getPostById = async (req, res, next) => {
 // @access Private
 export const getPostsByUser = async (req, res, next) => {
   try {
-    const { userId: paramUserId } = req.params;
-    const userId = req.user._id;
+    const currentUserId = req.user._id;
+    const authorId = req.resource._id;
 
-    if (!mongoose.Types.ObjectId.isValid(paramUserId)) {
-      return next(new AppError("Invalid user ID", 400));
-    }
-
-    const posts = await Post.find({ author: paramUserId })
+    const posts = await Post.find({ author: authorId })
       .sort({ createdAt: -1 })
-      .populate("author", "username profilePic");
+      .populate("author", "username profilePic")
+      .lean();
 
-    if (posts.length === 0) {
-      return next(new AppError("No posts found for this user", 404));
-    }
-
-    const formattedPosts = formatPostsArray(posts, userId);
+    const formattedPosts = formatPostsArray(posts, currentUserId);
 
     sendResponse(res, 200, "User's posts fetched successfully", {
       posts: formattedPosts,
@@ -121,31 +128,55 @@ export const getPostsByUser = async (req, res, next) => {
 // @route DELETE /api/posts/:postId
 // @access Private
 export const deletePost = async (req, res, next) => {
+  const session = await mongoose.startSession();
+
   try {
-    const { postId } = req.params;
-    const userId = req.user._id;
+    const post = req.resource;
 
-    // Validate postId format
-    if (!mongoose.Types.ObjectId.isValid(postId)) {
-      return next(new AppError("Invalid post ID", 400));
+    // Save cloudinary publicIds before deleting the post
+    const imagePublicIds = post.images?.map((image) => image.publicId) || [];
+
+    // Start a MongoDB transaction
+    session.startTransaction();
+
+    // Delete all comments associated with the post as part of the transaction
+    await Comment.deleteMany({ post: post._id }).session(session);
+
+    // Delete post as part of the same transaction
+    await Post.deleteOne({ _id: post._id }).session(session);
+
+    // Make both MongoDB deletions permanent
+    await session.commitTransaction();
+
+    // Clean up the external Cloudinary files
+
+    if (imagePublicIds.length > 0) {
+      const results = await Promise.allSettled(
+        imagePublicIds.map((publicId) => cloudinary.uploader.destroy(publicId)),
+      );
+
+      // Log any Cloudinary cleanup failures for later retry
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          console.error(
+            `Failed to delete Cloudinary image: ${imagePublicIds[index]}`,
+            result.reason,
+          );
+        }
+      });
     }
 
-    const post = await Post.findById(postId);
-
-    if (!post) {
-      return next(new AppError("Post not found", 404));
-    }
-
-    if (post.author.toString() !== userId.toString()) {
-      return next(new AppError("Unauthorized to delete this post", 403));
-    }
-
-    await Comment.deleteMany({ post: post._id });
-    await post.remove();
-    sendResponse(res, 200, "Post and associated comments deleted", {});
+    sendResponse(res, 200, "Post and associated comments deleted");
   } catch (err) {
+    // Undo MongoDB changes if the transaction has not already been committed
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     console.error("Error in deletePost:", err);
     next(err);
+  } finally {
+    // End the session
+    await session.endSession();
   }
 };
 
@@ -154,21 +185,12 @@ export const deletePost = async (req, res, next) => {
 // @access Private
 export const toggleLikePost = async (req, res, next) => {
   try {
-    const { postId } = req.params;
     const userId = req.user._id;
+    const post = req.resource;
 
-    // Validate post ID format
-    if (!mongoose.Types.ObjectId.isValid(postId)) {
-      return next(new AppError("Invalid post ID", 400));
-    }
-    const post = await Post.findById(postId);
-
-    if (!post) {
-      return next(new AppError("Post not found", 404));
-    }
-
-    // Determine if the current user has already liked this post
-    const alreadyLiked = post.likes.includes(userId);
+    const alreadyLiked = post.likes.some(
+      (id) => id.toString() === userId.toString(),
+    );
 
     // Toggle like status
     if (alreadyLiked) {
@@ -194,32 +216,55 @@ export const toggleLikePost = async (req, res, next) => {
 // @route PUT /api/posts/:postId
 // @access Private
 export const updatePost = async (req, res, next) => {
+  const { content, images = [], removedImageIds = [] } = req.body;
+  let postSaved = false;
+
   try {
-    const { postId } = req.params;
-    const { content, images } = req.body;
+    // const { postId } = req.params;
     const userId = req.user._id;
+    const post = req.resource;
 
-    // Validate post ID format
-    if (!mongoose.Types.ObjectId.isValid(postId)) {
-      return next(new AppError("Invalid post ID", 400));
-    }
-
-    const post = await Post.findById(postId);
-
-    if (!post) {
-      return next(new AppError("Post not found", 404));
-    }
-
-    // Check ownership
-    if (post.author.toString() !== userId.toString()) {
-      return next(new AppError("Unauthorized to update this post", 403));
-    }
-
-    // Update content and image if provided
+    // Update content if provided
     if (content !== undefined) post.content = content;
-    if (images !== undefined) post.images = images; // replace all existing images
+
+    // Find existing images selected for removal
+    const imagesToRemove = post.images.filter((image) =>
+      removedImageIds.includes(image._id.toString()),
+    );
+
+    // Calculate final image count BEFORE modifying anything
+
+    const finalImageCount =
+      post.images.length - imagesToRemove.length + images.length;
+
+    if (finalImageCount > 5) {
+      throw new AppError("A post can have a maximum of 5 images", 400);
+    }
+
+    // Remove the selected images from the post
+    post.images = post.images.filter(
+      (image) => !removedImageIds.includes(image._id.toString()),
+    );
+
+    // Add newly uploaded images while keeping remaining existing images
+    if (images.length > 0) {
+      post.images.push(...images);
+    }
 
     await post.save();
+
+    postSaved = true;
+
+    // Delete selected images from Cloudinary
+    if (imagesToRemove.length > 0) {
+      await Promise.allSettled(
+        imagesToRemove.map((image) =>
+          cloudinary.uploader.destroy(image.publicId),
+        ),
+      );
+    }
+
+    await post.populate("author", "username profilePic");
 
     const formattedPost = formatPost(post, userId);
 
@@ -227,6 +272,11 @@ export const updatePost = async (req, res, next) => {
       post: formattedPost,
     });
   } catch (err) {
+    if (!postSaved && images.length > 0) {
+      await Promise.allSettled(
+        images.map((image) => cloudinary.uploader.destroy(image.publicId)),
+      );
+    }
     console.error("Error in updatePost:", err);
     next(err);
   }
