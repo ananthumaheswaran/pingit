@@ -8,8 +8,11 @@ export const formatComment = (comment, currentUserId = null) => {
   // Determine whether the comment has been edited.
   // If createdAt and updatedAt are different,
   // the comment was modified after creation.
-  const isEdited =
-    commentObj.updatedAt.getTime() !== commentObj.createdAt.getTime();
+  const isEdited = Boolean(
+    commentObj.updatedAt &&
+    commentObj.createdAt &&
+    commentObj.updatedAt.getTime() !== commentObj.createdAt.getTime(),
+  );
 
   // Normalize author ID.
   // After populate(), author is usually an object:
@@ -30,10 +33,8 @@ export const formatComment = (comment, currentUserId = null) => {
   // 2. Computed frontend-friendly fields
   return {
     ...commentObj,
-
     // True if comment has been updated
     isEdited,
-
     // Permission flags
     canEdit: Boolean(isOwner),
     canDelete: Boolean(isOwner),
