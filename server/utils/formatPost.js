@@ -9,15 +9,20 @@ export const formatPost = (post, currentUserId = null) => {
   const likedByUser =
     currentUserId && Array.isArray(postObj.likes)
       ? postObj.likes.some((likedUser) => {
-          const id = typeof likedUser === "string" ? likedUser : likedUser?._id;
-          return id?.toString() === currentUserId;
+          const likedUserId = likedUser?._id ?? likedUser;
+
+          return likedUserId?.toString() === currentUserId?.toString();
         })
       : false;
+
+  const images = Array.isArray(postObj.images)
+    ? postObj.images.map((image) => ({ _id: image._id, url: image.url }))
+    : [];
 
   return {
     _id: postObj._id,
     content: postObj.content,
-    image: postObj.image,
+    images,
     author: postObj.author,
     createdAt: postObj.createdAt,
     updatedAt: postObj.updatedAt,
