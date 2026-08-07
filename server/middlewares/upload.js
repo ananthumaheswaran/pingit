@@ -1,10 +1,10 @@
 import multer from "multer";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
-import cloudinary from "../config/cloudinary";
+import cloudinary from "../config/cloudinary.js";
 
 export const getUploadMiddleware = ({
   folder,
-  transformations = [],
+  transformation = [],
   mode = "single",
   fieldName = "image",
   maxCount = 5,
@@ -14,7 +14,7 @@ export const getUploadMiddleware = ({
     params: {
       folder,
       allowed_formats: ["jpg", "jpeg", "png", "webp"],
-      transformations: transformations,
+      transformation: transformation,
     },
   });
 
@@ -34,7 +34,10 @@ export const getUploadMiddleware = ({
       if (mode === "single" && req.file) {
         req.body[fieldName] = req.file.path;
       } else if (mode === "multiple" && req.files?.length) {
-        req.body[fieldName] = req.files.map((file) => file.path);
+        req.body[fieldName] = req.files.map((file) => ({
+          url: file.path,
+          publicId: file.filename,
+        }));
       }
       next();
     });
