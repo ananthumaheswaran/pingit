@@ -17,13 +17,19 @@ export const socketAuth = async (socket, next) => {
     }
 
     const { valid, decoded, reason } = verifyToken(token);
+
     if (!valid) {
       return next(new Error(`Authentication error: ${reason}`));
     }
 
     const user = await User.findById(decoded.userId).select("-password");
+
     if (!user) {
       return next(new Error("Authentication error: User not found"));
+    }
+
+    if (!user.isActive) {
+      return next(new Error("Authentication error: Account deactivated"));
     }
 
     socket.user = user; // Attach user (like req.user in Express)
