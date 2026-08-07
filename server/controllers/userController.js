@@ -4,6 +4,8 @@ import { generateToken } from "../utils/generateToken.js";
 import { AppError } from "../utils/AppError.js";
 import { sendResponse } from "../utils/responseHelper.js";
 import cloudinary from "../config/cloudinary.js";
+import { formatAuthUser, formatPublicUser } from "../utils/formatUser.js";
+import { deleteUserData } from "../services/deleteUserData.js";
 
 /**
  * @desc    Register a new user
@@ -12,24 +14,28 @@ import cloudinary from "../config/cloudinary.js";
  */
 export const registerUser = async (req, res, next) => {
   try {
-    const { username, email, password } = req.body;
-
-    // Normalize username and email for consistency
-    const normalizedUsername = username.toLowerCase();
-    const normalizedEmail = email.toLowerCase();
+    const { name, username, email, password } = req.body;
 
     // Check if a user with the same email or username already exists
-    const existingUser = await User.findOne({
-      $or: [{ email: normalizedEmail }, { username: normalizedUsername }],
+    const existingEmail = await User.exists({ email });
+
+    if (existingEmail) {
+      return next(new AppError("Email already in use", 400));
+    }
+
+    const existingUsername = await User.exists({
+      username,
     });
-    if (existingUser) {
-      return next(new AppError("User already exists", 400));
+
+    if (existingUsername) {
+      return next(new AppError("Username already taken", 400));
     }
 
     // Create and save the new user
     const newUser = new User({
-      username: normalizedUsername,
-      email: normalizedEmail,
+      name,
+      username,
+      email,
       password,
     });
     await newUser.save();
@@ -51,36 +57,31 @@ export const loginUser = async (req, res, next) => {
   try {
     const { emailOrUsername, password } = req.body;
 
-    // Normalize input for case-insensitive matching
-    const normalizedIdentifier = emailOrUsername.toLowerCase();
-
     // Find user by email or username
     const user = await User.findOne({
-      $or: [
-        { email: normalizedIdentifier },
-        { username: normalizedIdentifier },
-      ],
-    });
+      $or: [{ email: emailOrUsername }, { username: emailOrUsername }],
+    }).select("+password");
 
     // Validate user existence and password correctness
     if (!user || !(await user.comparePassword(password))) {
       return next(new AppError("Invalid credentials", 401));
     }
 
+    // Reactivate account on successful login
+    if (!user.isActive) {
+      user.isActive = true;
+      user.deactivatedAt = null;
+
+      await user.save();
+    }
+
     // Generate JWT token for authenticated user
     const token = generateToken(user._id);
-
-    // Prepare user data to return (exclude sensitive info)
-    const formattedUser = {
-      _id: user._id,
-      username: user.username,
-      profilePic: user.profilePic,
-    };
 
     // Send token and user info in response
     sendResponse(res, 200, "Login successful", {
       token,
-      user: formattedUser,
+      user: formatAuthUser(user),
     });
   } catch (err) {
     console.error("[userController][loginUser] Error:", err);
@@ -100,25 +101,27 @@ export const logoutUser = (req, res) => {
 
 /**
  * @desc    Search users by partial username match
- * @route   GET /api/users/search?username=
+ * @route   GET /api/users/search?search=
  * @access  Private
  */
 export const searchUsers = async (req, res, next) => {
   try {
-    const { username } = req.query;
+    const { search } = req.query;
 
-    // Validate presence of search query
-    if (!username) {
-      return next(new AppError("Please provide a username to search", 400));
-    }
-
-    // Perform case-insensitive partial match search on username
+    // Case-insensitive partial match on username or name
     const users = await User.find({
-      username: { $regex: username, $options: "i" }, //case-insensitive match
-    }).select("username name profilePic"); // Select only necessary fields
+      $or: [
+        {
+          username: { $regex: search, $options: "i" },
+        },
+        { name: { $regex: search, $options: "i" } },
+      ],
+    })
+      .select("username name profilePic")
+      .lean(); // Select only necessary fields
 
     sendResponse(res, 200, "Users fetched successfully", {
-      users,
+      users: users.map(formatAuthUser),
       count: users.length,
     });
   } catch (err) {
@@ -137,15 +140,15 @@ export const getUserProfile = async (req, res, next) => {
     const { userId } = req.params;
 
     // Fetch user data with selected public fields
-    const user = await User.findById(userId).select(
-      "username name profilePic bio followers following"
-    );
+    const user = await User.findById(userId)
+      .select("username name profilePic bio followers following")
+      .lean();
 
     if (!user) {
       return next(new AppError("User not found", 404));
     }
 
-    // Fetch user's posts, most recent first, with author and comment details populated
+    // Fetch user's posts (newest first)
     const posts = await Post.find({ author: user._id })
       .sort({ createdAt: -1 })
       .populate("author", "username profilePic")
@@ -155,23 +158,20 @@ export const getUserProfile = async (req, res, next) => {
           path: "author",
           select: "username profilePic",
         },
-      });
+      })
+      .lean();
 
-    // Format user data to include counts
-    const formattedUser = {
-      _id: user._id,
-      username: user.username,
-      name: user.name,
-      bio: user.bio,
-      profilePic: user.profilePic,
-      followerCount: user.followers.length,
-      followingCount: user.following.length,
-      postCount: posts.length,
-    };
+    const profileId = user._id.toString();
+
+    const isOwnProfile = req.user._id.toString() === profileId;
+
+    const isFollowing = req.user.following.some(
+      (id) => id.toString() === profileId,
+    );
 
     // Send user profile and posts data
     sendResponse(res, 200, "User profile fetched", {
-      user: formattedUser,
+      user: formatPublicUser(user, posts.length, isFollowing, isOwnProfile),
       posts,
     });
   } catch (err) {
@@ -189,18 +189,8 @@ export const getFollowList = async (req, res, next) => {
   try {
     const { userId, type } = req.params;
 
-    // Validate that type is either 'followers' or 'following'
-    if (!["followers", "following"].includes(type)) {
-      return next(
-        new AppError(
-          `Invalid follow list type. Use 'followers' or 'following'`,
-          400
-        )
-      );
-    }
-
     // Retrieve the user and only the requested follow list field
-    const user = await User.findById(userId).select(type);
+    const user = await User.findById(userId).select(type).lean();
     if (!user) {
       return next(new AppError("User not found", 404));
     }
@@ -211,16 +201,16 @@ export const getFollowList = async (req, res, next) => {
     }
 
     // Find user details for each follower/following
-    const followList = await User.find({ _id: { $in: user[type] } }).select(
-      "username profilePic"
-    );
+    const followList = await User.find({ _id: { $in: user[type] } })
+      .select("name username profilePic")
+      .lean();
 
     // Return list and count
     sendResponse(
       res,
       200,
       `${type.charAt(0).toUpperCase() + type.slice(1)} list fetched`,
-      { [type]: followList, count: followList.length }
+      { [type]: followList.map(formatAuthUser), count: followList.length },
     );
   } catch (err) {
     console.error(`[userController][getFollowList] Error:`, err);
@@ -235,19 +225,12 @@ export const getFollowList = async (req, res, next) => {
  */
 export const getUserSettings = async (req, res, next) => {
   try {
-    const userId = req.user._id;
-
-    // Fetch user info with selected fields
-    const user = await User.findById(userId).select(
-      "username name profilePic createdAt"
-    );
-
-    if (!user) {
-      return next(new AppError("User not found", 404));
-    }
+    const user = req.user;
 
     // Send user settings data
-    sendResponse(res, 200, "User settings fetched", { user });
+    sendResponse(res, 200, "User settings fetched", {
+      user: formatUserSettings(user),
+    });
   } catch (err) {
     console.error("[userController][getUserSettings] Error:", err);
     next(err);
@@ -264,30 +247,40 @@ export const updateUserProfile = async (req, res, next) => {
     const { username, name, bio } = req.body;
     const userId = req.user._id;
 
-    // Normalize username if provided
-    const normalizedUsername = username?.toLowerCase();
+    if (
+      !req.file &&
+      username === undefined &&
+      name === undefined &&
+      bio === undefined
+    ) {
+      return next(
+        new AppError("At least one field must be provided for update", 400),
+      );
+    }
 
     // Fetch user excluding sensitive fields
-    const user = await User.findById(userId).select("-password -email");
+    const user = await User.findById(userId);
+
     if (!user) {
       return next(new AppError("User not found", 404));
     }
 
     // If username change requested, check for conflicts
-    if (normalizedUsername && normalizedUsername !== user.username) {
-      const existingUser = await User.findOne({ username: normalizedUsername });
+    if (username && username !== user.username) {
+      const existingUser = await User.findOne({ username });
+
       if (existingUser) {
         return next(new AppError("Username is already taken", 400));
       }
-      user.username = normalizedUsername;
+      user.username = username;
     }
 
-    // Update name and bio if provided
-    const updates = { name, bio };
-    for (const key in updates) {
-      if (updates[key] !== undefined) {
-        user[key] = updates[key];
-      }
+    if (name !== undefined) {
+      user.name = name;
+    }
+
+    if (bio !== undefined) {
+      user.bio = bio;
     }
 
     // Handle profile picture update if file uploaded
@@ -348,8 +341,8 @@ export const changePassword = async (req, res, next) => {
       return next(
         new AppError(
           "New password must be different from current password",
-          400
-        )
+          400,
+        ),
       );
     }
 
@@ -358,7 +351,7 @@ export const changePassword = async (req, res, next) => {
     await user.save();
 
     // Send success response
-    sendResponse(res, 200, "Password changed successfully", {});
+    sendResponse(res, 200, "Password changed successfully");
   } catch (err) {
     console.error("[userController] [changePassword] Error:", err);
     next(err);
@@ -375,11 +368,9 @@ export const changeEmail = async (req, res, next) => {
     const { currentPassword, newEmail } = req.body;
     const userId = req.user._id;
 
-    // Normalize new email
-    const normalizedNewEmail = newEmail.toLowerCase();
-
     // Fetch user with password and email fields
     const user = await User.findById(userId).select("+password +email");
+
     if (!user) {
       return next(new AppError("User not found", 404));
     }
@@ -390,22 +381,26 @@ export const changeEmail = async (req, res, next) => {
       return next(new AppError("Current password is incorrect", 401));
     }
 
+    if (newEmail === user.email) {
+      return next(
+        new AppError("New email must be different from current email", 400),
+      );
+    }
+
     // Check for email conflict
-    const existingUser = await User.findOne({ email: normalizedNewEmail });
+    const existingUser = await User.findOne({ email: newEmail });
     if (existingUser) {
       return next(new AppError("Email already in use", 400));
     }
 
     // Update email and save
-    user.email = normalizedNewEmail;
+    user.email = newEmail;
     await user.save();
 
-    const responseData = {
-      email: user.email,
-    };
-
     // Respond with updated email
-    sendResponse(res, 200, "Email changed successfully", responseData);
+    sendResponse(res, 200, "Email changed successfully", {
+      email: user.email,
+    });
   } catch (err) {
     console.error("[userController] [changeEmail] Error:", err);
     next(err);
@@ -424,21 +419,23 @@ export const deleteAccount = async (req, res, next) => {
 
     // Fetch user including password for verification
     const user = await User.findById(userId).select("+password");
+
     if (!user) {
       return next(new AppError("User not found", 404));
     }
 
     // Verify current password before deleting
     const isMatch = await user.comparePassword(currentPassword);
+
     if (!isMatch) {
       return next(new AppError("Current password is incorrect", 401));
     }
 
-    // Delete user document
-    await User.findByIdAndDelete(userId);
+    // Permanently delete the user and all related data
+    await deleteUserData(userId);
 
     // Send success response
-    sendResponse(res, 200, "User account deleted successfully", {});
+    sendResponse(res, 200, "User account deleted successfully");
   } catch (err) {
     console.error("[userController] [deleteAccount] Error:", err);
     next(err);
@@ -473,9 +470,59 @@ export const deactivateAccount = async (req, res, next) => {
     await user.save();
 
     // Send success response
-    sendResponse(res, 200, "User account deactivated successfully", {});
+    sendResponse(res, 200, "User account deactivated successfully");
   } catch (err) {
     console.error("[userController] [deactivateAccount] Error:", err);
+    next(err);
+  }
+};
+
+/**
+ * @desc    Toggle follow or unfollow a user
+ * @route   PATCH /api/users/:userId/follow
+ * @access  Private
+ */
+export const toggleFollowUser = async (req, res, next) => {
+  try {
+    const currentUserId = req.user._id;
+    const { userId } = req.params;
+
+    // Prevent self-follow
+    if (currentUserId.toString() === userId) {
+      return next(new AppError("You cannot follow yourself", 400));
+    }
+
+    const [currentUser, targetUser] = await Promise.all([
+      User.findById(currentUserId),
+      User.findById(userId),
+    ]);
+    if (!currentUser || !targetUser) {
+      return next(new AppError("User not found", 404));
+    }
+
+    const isFollowing = currentUser.following.some((id) =>
+      id.equals(targetUser._id),
+    );
+
+    if (isFollowing) {
+      currentUser.following.pull(targetUser._id);
+      targetUser.followers.pull(currentUser._id);
+    } else {
+      currentUser.following.push(targetUser._id);
+      targetUser.followers.push(currentUser._id);
+    }
+
+    await Promise.all([currentUser.save(), targetUser.save()]);
+
+    sendResponse(
+      res,
+      200,
+      isFollowing
+        ? "User unfollowed successfully"
+        : "User followed successfully",
+      { isFollowing: !isFollowing, followerCount: targetUser.followers.length },
+    );
+  } catch (err) {
     next(err);
   }
 };
