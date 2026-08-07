@@ -23,7 +23,14 @@ const messageSchema = new mongoose.Schema(
       },
     },
     image: {
-      type: String, // URL or file path if using multer
+      url: {
+        type: String,
+        default: "",
+      },
+      publicId: {
+        type: String,
+        default: "",
+      },
     },
     deliveredAt: {
       type: Date,
