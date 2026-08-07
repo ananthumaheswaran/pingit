@@ -8,14 +8,19 @@ import {
   deletePost,
   toggleLikePost,
 } from "../controllers/postController.js";
-import { protect } from "../middlewares/authMiddleware.js";
-import { validate } from "../middlewares/validate.js";
+
 import {
   createPostSchema,
   updatePostSchema,
-} from "../validations/postValidation";
+  postIdSchema,
+  getPostsByUserSchema,
+} from "../validations/postValidation.js";
+
+import { protect } from "../middlewares/authMiddleware.js";
+import { validate } from "../middlewares/validate.js";
 import { verifyOwnership } from "../middlewares/verifyOwnership.js";
 import { postImageUpload } from "../middlewares/uploadPresets.js";
+import { loadResource } from "../middlewares/loadResource.js";
 
 const router = express.Router();
 /**
@@ -31,7 +36,7 @@ router.post(
   protect,
   postImageUpload,
   validate(createPostSchema),
-  createPost
+  createPost,
 );
 
 /**
@@ -44,22 +49,34 @@ router.post(
 router.get("/", protect, getAllPosts);
 
 /**
- * @route   GET /api/posts/:postId
- * @desc    Get a single post by ID
- * @access  Private
- * @middleware
- *   - protect: verifies JWT token and attaches user to req
- * */
-router.get("/:postId", protect, getPostById);
-
-/**
  * @route   GET /api/posts/user/:userId
  * @desc    Get all posts by a specific user
  * @access  Private
  * @middleware
  *   - protect: verifies JWT token and attaches user to req
  * */
-router.get("/user/:userId", protect, getPostsByUser);
+router.get(
+  "/user/:userId",
+  protect,
+  validate(getPostsByUserSchema),
+  loadResource("user", "userId"),
+  getPostsByUser,
+);
+
+/**
+ * @route   GET /api/posts/:postId
+ * @desc    Get a single post by ID
+ * @access  Private
+ * @middleware
+ *   - protect: verifies JWT token and attaches user to req
+ * */
+router.get(
+  "/:postId",
+  protect,
+  validate(postIdSchema),
+  loadResource("post", "postId"),
+  getPostById,
+);
 
 /**
  * @route   PUT /api/posts/:postId
@@ -73,9 +90,10 @@ router.put(
   "/:postId",
   protect,
   postImageUpload,
-  verifyOwnership("post", "postId"),
   validate(updatePostSchema),
-  updatePost
+  loadResource("post", "postId"),
+  verifyOwnership(),
+  updatePost,
 );
 
 /**
@@ -88,17 +106,25 @@ router.put(
 router.delete(
   "/:postId",
   protect,
-  verifyOwnership("post", "postId"),
-  deletePost
+  validate(postIdSchema),
+  loadResource("post", "postId"),
+  verifyOwnership(),
+  deletePost,
 );
 
 /**
- * @route   POST /api/posts/like/:postId
+ * @route   PUT /api/posts/like/:postId
  * @desc    Toggle like on a post
  * @access  Private
  * @middleware
  *   - protect: verifies JWT token and attaches user to req
  * */
-router.put("/like/:postId", protect, toggleLikePost);
+router.put(
+  "/like/:postId",
+  protect,
+  validate(postIdSchema),
+  loadResource("post", "postId"),
+  toggleLikePost,
+);
 
 export default router;
