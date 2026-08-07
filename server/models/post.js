@@ -7,10 +7,18 @@ const postSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    images: {
-      type: [String], // Store image URL or file path
-      default: [],
-    },
+    images: [
+      {
+        url: {
+          type: String,
+          required: true,
+        },
+        publicId: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
     author: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User", // Refers to the User model
@@ -29,7 +37,7 @@ const postSchema = new mongoose.Schema(
       },
     ],
   },
-  { timestamps: true } // Adds createdAt and updatedAt fields automatically
+  { timestamps: true }, // Adds createdAt and updatedAt fields automatically
 );
 
 const Post = mongoose.model("Post", postSchema);
