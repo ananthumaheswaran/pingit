@@ -1,63 +1,48 @@
 import { AppError } from "../utils/AppError.js";
-import User from "../models/user.js";
-import Post from "../models/post.js";
-import Comment from "../models/comment.js";
-
-// Map each resource type to its Mongoose model and owner field
-const resourceMap = {
-  user: { model: User, ownerField: "_id" },
-  post: { model: Post, ownerField: "author" },
-  comment: { model: Comment, ownerField: "author" },
-};
 
 /**
- * Middleware to verify ownership of a resource before allowing update/delete actions.
+ * @middleware verifyOwnership
+ * @desc Verifies that the authenticated user owns the resource
+ *       loaded by loadResource().
  *
- * @param {string} resourceType - One of: 'user', 'post', or 'comment'
- * @param {string} idParam - Name of the URL parameter that holds the resource ID (default is 'id')
+ * Requirements:
+ *   - protect middleware must run first
+ *   - loadResource middleware must run first
  *
- * @returns {Function} Express middleware
+ * Supported ownership fields:
+ *   - User    -> _id
+ *   - Post    -> author
+ *   - Comment -> author
+ *
+ * @access Protected
  */
+export const verifyOwnership = () => {
+  return (req, res, next) => {
+    const resource = req.resource;
 
-export const verifyOwnership = (resourceType, idParam = "id") => {
-  const resourceConfig = resourceMap[resourceType];
-
-  if (!resourceConfig) {
-    throw new Error(
-      `Invalid resource type '${resourceType}' passed to verifyOwnership middleware.`
-    );
-  }
-
-  const { model, ownerField } = resourceConfig;
-
-  return async (req, res, next) => {
-    try {
-      const resourceId = req.params[idParam];
-      const loggedInUserId = req.user.id;
-
-      if (!resourceId) {
-        return next(new AppError("Resource ID parameter is missing", 400));
-      }
-
-      // Fetch the resource from DB (user, post, or comment)
-      const resource = await model.findById(resourceId);
-
-      if (!resource) {
-        return next(new AppError(`${resourceType} not found`, 404));
-      }
-
-      // Check if the logged-in user is the owner
-      const ownerId = resource[ownerField].toString();
-      if (ownerId !== loggedInUserId) {
-        return next(
-          new AppError("Access denied: You do not own this resource", 403)
-        );
-      }
-
-      // Ownership confirmed – proceed to the next middleware or controller
-      next();
-    } catch (err) {
-      next(err);
+    if (!resource) {
+      return next(
+        new AppError(
+          "Resource not loaded. Ensure loadResource middleware runs first.",
+          500,
+        ),
+      );
     }
+
+    const currentUserId = req.user._id.toString();
+
+    //User document ownership
+    if (resource._id?.toString() === currentUserId) {
+      return next();
+    }
+
+    // Post / comment ownership
+    if (resource.author?.toString() === currentUserId) {
+      return next();
+    }
+
+    return next(
+      new AppError("You are not authorized to perform this action", 403),
+    );
   };
 };
