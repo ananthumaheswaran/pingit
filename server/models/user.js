@@ -65,7 +65,7 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Hash password before saving
@@ -82,6 +82,10 @@ userSchema.pre("save", async function (next) {
 
 // Compare password for login
 userSchema.methods.comparePassword = async function (userTypedPassword) {
+  if (!this.password) {
+    throw new Error("Password field not loaded");
+  }
+
   return bcrypt.compare(userTypedPassword, this.password);
 };
 
