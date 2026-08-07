@@ -1,6 +1,18 @@
 // /middlewares/errorHandler.js
 
+import { AppError } from "../utils/AppError.js";
+
 const errorHandler = (err, req, res, next) => {
+  // MongoDB duplicate key error
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyPattern)[0];
+
+    err = new AppError(
+      `${field.charAt(0).toUpperCase() + field.slice(1)} already exists`,
+      400,
+    );
+  }
+
   const statusCode = err.statusCode || 500;
   const isDev = process.env.NODE_ENV === "development";
 
@@ -9,8 +21,8 @@ const errorHandler = (err, req, res, next) => {
     message: err.isOperational
       ? err.message
       : isDev
-      ? err.message
-      : "Oops! Something went wrong on our end. Please try again shortly.",
+        ? err.message
+        : "Oops! Something went wrong on our end. Please try again shortly.",
   };
 
   if (err.details) {
