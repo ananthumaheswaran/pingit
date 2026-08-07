@@ -1,10 +1,8 @@
 import Comment from "../models/comment.js";
 import Post from "../models/post.js";
 import { AppError } from "../utils/AppError.js";
-import { isValidObjectId } from "../utils/objectIdValidator.js";
 import { sendResponse } from "../utils/responseHelper.js";
 import { formatComment } from "../utils/formatComment.js";
-import mongoose from "mongoose";
 
 // @desc Create a new comment on a post or reply
 // @route POST /api/comments/post/:postId
@@ -12,31 +10,16 @@ import mongoose from "mongoose";
 
 export const createComment = async (req, res, next) => {
   try {
-    const { postId } = req.params;
     const { text, parentComment } = req.body;
     const currentUserId = req.user._id;
 
-    // Validate post ID
-    if (!isValidObjectId(postId)) {
-      return next(new AppError("Invalid post ID", 400));
-    }
-
-    // Validate parent comment ID if provided
-    if (parentComment && !isValidObjectId(parentComment)) {
-      return next(new AppError("Invalid parent comment ID", 400));
-    }
-
-    // Check if the target post exists
-    const post = await Post.findById(postId).select("author comments");
-
-    if (!post) {
-      return next(new AppError("Post not found", 404));
-    }
+    const post = req.resource;
+    const postId = post._id;
 
     // Validate parent comment if reply
-
     if (parentComment) {
-      const parentCommentDoc = await Comment.findById(parentComment);
+      const parentCommentDoc =
+        await Comment.findById(parentComment).select("post");
 
       if (!parentCommentDoc) {
         return next(new AppError("Parent comment not found", 404));
@@ -70,7 +53,7 @@ export const createComment = async (req, res, next) => {
     await comment.populate("author", "username profilePic");
 
     // Format frontend-ready response
-    const formattedComment = formatComment(comment, currentUserId, post.author);
+    const formattedComment = formatComment(comment, currentUserId);
 
     // Send response
     sendResponse(
@@ -93,20 +76,9 @@ export const createComment = async (req, res, next) => {
 
 export const getCommentsByPost = async (req, res, next) => {
   try {
-    const { postId } = req.params;
     const currentUserId = req.user._id;
-
-    // Validate post ID
-    if (!isValidObjectId(postId)) {
-      return next(new AppError("Invalid post ID", 400));
-    }
-
-    // Fetch post
-    const post = await Post.findById(postId).select("author");
-
-    if (!post) {
-      return next(new AppError("Post not found", 404));
-    }
+    const post = req.resource;
+    const postId = post._id;
 
     // Fetch all comments
     const comments = await Comment.find({ post: postId })
@@ -115,12 +87,13 @@ export const getCommentsByPost = async (req, res, next) => {
       .lean();
 
     // Format comments
+    const commentMap = new Map();
+
     for (const comment of comments) {
-      const formattedComment = formatComment(
-        comment,
-        currentUserId,
-        post.author,
-      );
+      const formattedComment = {
+        ...formatComment(comment, currentUserId),
+        replies: [],
+      };
 
       commentMap.set(comment._id.toString(), formattedComment);
     }
@@ -140,13 +113,130 @@ export const getCommentsByPost = async (req, res, next) => {
     }
 
     // Send response
-    sendResponse(req, 200, "Comments fetched successfully", {
+    sendResponse(res, 200, "Comments fetched successfully", {
       comments: topLevelComments,
       count: comments.length,
     });
   } catch (err) {
     console.error("[commentController] [getCommentsByPost] Error:", err);
+    next(err);
+  }
+};
 
+// @desc   Edit a comment
+// @route  PATCH /api/comments/:commentId
+// @access Private
+
+export const editComment = async (req, res, next) => {
+  try {
+    const { text } = req.body;
+    const currentUserId = req.user._id;
+    const comment = req.resource;
+
+    // Update text
+    comment.text = text.trim();
+
+    // Save
+    await comment.save();
+
+    // Populate author
+    await comment.populate("author", "username profilePic");
+
+    // Format response
+    const formattedComment = formatComment(comment, currentUserId);
+
+    // Send response
+    sendResponse(res, 200, "Comment updated successfully", {
+      comment: formattedComment,
+    });
+  } catch (err) {
+    console.error("[commentController][editComment] Error:", err);
+    next(err);
+  }
+};
+
+// @desc Delete a comment and its replies
+// @route DELETE /api/comments/:commentId
+// @access Private
+
+export const deleteComment = async (req, res, next) => {
+  try {
+    const comment = req.resource;
+
+    // Find all descendants
+    const commentsToDelete = [comment._id];
+    const queue = [comment._id];
+
+    while (queue.length > 0) {
+      const currentCommentId = queue.shift();
+
+      const replies = await Comment.find({
+        parentComment: currentCommentId,
+      }).select("_id");
+
+      for (const reply of replies) {
+        commentsToDelete.push(reply._id);
+        queue.push(reply._id);
+      }
+    }
+
+    // Remove top-level comment from post.comments
+    if (!comment.parentComment) {
+      await Post.findByIdAndUpdate(comment.post, {
+        $pull: { comments: comment._id },
+      });
+    }
+
+    // Delete all comments
+    await Comment.deleteMany({
+      _id: { $in: commentsToDelete },
+    });
+
+    sendResponse(res, 200, "Comment deleted successfully");
+  } catch (err) {
+    console.error("[commentController][deleteComment] Error:", err);
+    next(err);
+  }
+};
+
+// @descv  Toggle like on a comment
+// @route  PATCH /api/comments/:commentId/like
+// @access Private
+
+export const toggleLikeComment = async (req, res, next) => {
+  try {
+    const currentUserId = req.user._id;
+    const comment = req.resource;
+
+    // Check existing like
+    const alreadyLiked = comment.likes.some(
+      (userId) => userId.toString() === currentUserId.toString(),
+    );
+
+    let message;
+
+    if (alreadyLiked) {
+      // Unlike
+      comment.likes = comment.likes.filter(
+        (userId) => userId.toString() !== currentUserId.toString(),
+      );
+
+      message = "Comment unliked successfully";
+    } else {
+      //Like
+
+      comment.likes.push(currentUserId);
+      message = "Comment liked successfully";
+    }
+
+    // Save
+    await comment.save();
+    sendResponse(res, 200, message, {
+      likeCount: comment.likes.length,
+      isLiked: !alreadyLiked,
+    });
+  } catch (err) {
+    console.error("[commentController][toggleLikeComment] Error:", err);
     next(err);
   }
 };
