@@ -1,5 +1,5 @@
-import { createLimiter } from "../utils/createLimiter";
-import { RATE_LIMITS } from "../config/rateLimitConfig";
+import { createLimiter } from "../utils/createLimiter.js";
+import { RATE_LIMITS } from "../config/rateLimitConfig.js";
 
 /**
  * Rate limiters for various application routes.
