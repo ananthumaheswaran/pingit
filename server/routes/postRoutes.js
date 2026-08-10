@@ -29,7 +29,8 @@ const router = express.Router();
  * @access  Private
  * @middleware
  *    - protect: verifies JWT token and attaches user to req
- *    - validate(createPostSchema): validates post content
+ *    - postImageUpload: uploads post images to Cloudinary (if provided)
+ *    - validate(createPostSchema): validates post content and uploaded image metadata
  */
 router.post(
   "/",
@@ -54,6 +55,8 @@ router.get("/", protect, getAllPosts);
  * @access  Private
  * @middleware
  *   - protect: verifies JWT token and attaches user to req
+ *   - validate(getPostsByUserSchema): validates userId parameter
+ *   - loadResource("user", "userId"): loads the requested user into req.resource
  * */
 router.get(
   "/user/:userId",
@@ -69,6 +72,8 @@ router.get(
  * @access  Private
  * @middleware
  *   - protect: verifies JWT token and attaches user to req
+ *   - validate(postIdSchema): validates postId parameter
+ *   - loadResource("post", "postId"): loads the requested post into req.resource
  * */
 router.get(
   "/:postId",
@@ -83,8 +88,11 @@ router.get(
  * @desc    Update a post by ID
  * @access  Private
  * @middleware
- *  - protect: verifies JWT token and attaches user to req
- *  - validate(createPostSchema): validates post content
+ *   - protect: verifies JWT token and attaches user to req
+ *   - postImageUpload: uploads new post images to Cloudinary (if provided)
+ *   - validate(updatePostSchema): validates post update fields
+ *   - loadResource("post", "postId"): loads the target post into req.resource
+ *   - verifyOwnership(): ensures only the post owner can update it
  * */
 router.put(
   "/:postId",
@@ -102,6 +110,9 @@ router.put(
  * @access  Private
  * @middleware
  *   - protect: verifies JWT token and attaches user to req
+ *   - validate(postIdSchema): validates postId parameter
+ *   - loadResource("post", "postId"): loads the target post into req.resource
+ *   - verifyOwnership(): ensures only the post owner can delete it
  * */
 router.delete(
   "/:postId",
@@ -118,6 +129,8 @@ router.delete(
  * @access  Private
  * @middleware
  *   - protect: verifies JWT token and attaches user to req
+ *   - validate(postIdSchema): validates postId parameter
+ *   - loadResource("post", "postId"): loads the target post into req.resource
  * */
 router.put(
   "/like/:postId",
