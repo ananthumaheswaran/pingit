@@ -3,6 +3,14 @@ import {
   markMessageRead,
   markMessageDelivered,
 } from "../services/messageService.js";
+import {
+  sendMessageSchema,
+  markAsReadSchema,
+  typingSchema,
+  userOnlineAckSchema,
+} from "../validations/messageValidation.js";
+import { messageSocketLimiter } from "../middlewares/socketRateLimiter.js";
+import { validateSocketPayload } from "../utils/validateSocketPayload.js";
 
 /**
  * @socket chatSocket
@@ -68,9 +76,23 @@ export const chatSocket = (io) => {
     });
 
     // ------------------------------------------------------------
-    // DELIVER pending messages when user comes online
+    // MARK PENDING MESSAGES AS DELIVERED WHEN USER COMES ONLINE
+    // @event user_online_ack
+    // @desc Marks undelivered messages from the specified sender
+    //       as delivered when the user comes online.
     // ------------------------------------------------------------
-    socket.on("user_online_ack", async ({ fromUserId }) => {
+
+    socket.on("user_online_ack", async (payload) => {
+      const { error, value } = validateSocketPayload(
+        userOnlineAckSchema,
+        payload,
+      );
+
+      if (error) {
+        return socket.emit("error_message", error);
+      }
+
+      const { fromUserId } = value;
       try {
         await markMessageDelivered({
           recipientId: userId,
@@ -84,10 +106,28 @@ export const chatSocket = (io) => {
     // ------------------------------------------------------------
     // SEND MESSAGE
     // @event send_message
-    // @desc Saves message to DB, notifies recipient in real-time,
-    //       and confirms delivery to all sender devices.
+    // @desc Saves the message to the database, sends it to all active
+    //       recipient devices, marks it as delivered when the recipient
+    //       is online, and confirms the saved message to all sender devices.
     // ------------------------------------------------------------
-    socket.on("send_message", async ({ recipientId, text, image }) => {
+
+    socket.on("send_message", async (payload) => {
+      const result = messageSocketLimiter(userId);
+
+      if (!result.allowed) {
+        return socket.emit("error_message", result.message);
+      }
+
+      const { error, value } = validateSocketPayload(
+        sendMessageSchema.body,
+        payload,
+      );
+
+      if (error) {
+        return socket.emit("error_message", error);
+      }
+
+      const { recipientId, text, image } = value;
       try {
         // Persist message in database
         const message = await saveMessage({
@@ -122,7 +162,17 @@ export const chatSocket = (io) => {
     // @event mark_read
     // @desc Updates read timestamp and notifies all sender devices
     // ------------------------------------------------------------
-    socket.on("mark_read", async ({ messageId }) => {
+    socket.on("mark_read", async (payload) => {
+      const { error, value } = validateSocketPayload(
+        markAsReadSchema.params,
+        payload,
+      );
+
+      if (error) {
+        return socket.emit("error_message", error);
+      }
+
+      const { messageId } = value;
       try {
         const updatedMessage = await markMessageRead({
           messageId,
@@ -149,14 +199,22 @@ export const chatSocket = (io) => {
     // @event stop_typing
     // @desc Notifies recipient when user is typing or stops typing.
     // ------------------------------------------------------------
-    socket.on("typing", ({ recipientId }) => {
+    socket.on("typing", (payload) => {
+      const { error, value } = validateSocketPayload(typingSchema, payload);
+      if (error) {
+        return socket.emit("error_message", error);
+      }
       // Notify all recipient devices/tabs
-      io.to(recipientId).emit("typing", { from: userId });
+      io.to(value.recipientId).emit("typing", { from: userId });
     });
 
-    socket.on("stop_typing", ({ recipientId }) => {
+    socket.on("stop_typing", (payload) => {
+      const { error, value } = validateSocketPayload(typingSchema, payload);
+      if (error) {
+        return socket.emit("error_message", error);
+      }
       // Notify all recipient devices/tabs
-      io.to(recipientId).emit("stop_typing", { from: userId });
+      io.to(value.recipientId).emit("stop_typing", { from: userId });
     });
 
     // ------------------------------------------------------------
