@@ -58,17 +58,22 @@ export const markMessageDelivered = async ({ recipientId, senderId }) => {
     { sender: senderId, recipient: recipientId, deliveredAt: null },
     {
       $set: { deliveredAt: new Date() },
-    }
+    },
   );
 };
 
-export const getConversation = async (userA, userB, page = 1, limit = 20) => {
+export const getConversation = async (
+  currentUserId,
+  recipientId,
+  page = 1,
+  limit = 20,
+) => {
   const skip = (page - 1) * limit;
 
   const query = {
     $or: [
-      { sender: userA, recipient: userB },
-      { sender: userB, recipient: userA },
+      { sender: currentUserId, recipient: recipientId },
+      { sender: recipientId, recipient: currentUserId },
     ],
   };
 
