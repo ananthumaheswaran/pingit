@@ -2,7 +2,9 @@ export const formatAuthUser = (user) => ({
   _id: user._id,
   name: user.name,
   username: user.username,
-  profilePic: user.profilePic,
+  // Expose only the profile picture URL.
+  // The publicId is kept internal and is not sent to the client.
+  profilePic: user.profilePic?.url || null,
 });
 
 export const formatPublicUser = (
@@ -15,7 +17,7 @@ export const formatPublicUser = (
   username: user.username,
   name: user.name,
   bio: user.bio,
-  profilePic: user.profilePic,
+  profilePic: user.profilePic?.url || null,
   followerCount: user.followers?.length || 0,
   followingCount: user.following?.length || 0,
   postCount,
@@ -23,9 +25,9 @@ export const formatPublicUser = (
   isOwnProfile,
 });
 
-const formatUserSettings = (user) => ({
+export const formatUserSettings = (user) => ({
   username: user.username,
   name: user.name,
-  profilePic: user.profilePic,
+  profilePic: user.profilePic?.url || null,
   createdAt: user.createdAt,
 });
