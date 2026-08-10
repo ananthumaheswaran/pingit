@@ -31,17 +31,16 @@ export const RATE_LIMITS = {
     message: "Too many requests from this IP, please slow down.",
   },
 
-  // Controls how frequently a user can send chat messages.
+  // Prevents chat spam while allowing normal conversation.
   MESSAGE: {
     windowMs: 10 * 1000,
     max: 10,
     message: "You're sending messages too fast.",
   },
 
-  // Restricts media (image) uploads to protect from spam/bandwidth abuse.
-  MEDIA_MESSAGE: {
+  MESSAGE_SOCKET: {
     windowMs: 10 * 1000,
-    max: 5,
-    message: "You're uploading too many images, Try again soon.",
+    max: 10,
+    message: "You're sending messages too fast.",
   },
 };
