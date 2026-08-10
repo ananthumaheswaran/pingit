@@ -4,8 +4,12 @@ import { generateToken } from "../utils/generateToken.js";
 import { AppError } from "../utils/AppError.js";
 import { sendResponse } from "../utils/responseHelper.js";
 import cloudinary from "../config/cloudinary.js";
-import { formatAuthUser, formatPublicUser } from "../utils/formatUser.js";
 import { deleteUserData } from "../services/deleteUserData.js";
+import {
+  formatAuthUser,
+  formatPublicUser,
+  formatUserSettings,
+} from "../utils/formatUser.js";
 
 /**
  * @desc    Register a new user
@@ -243,12 +247,13 @@ export const getUserSettings = async (req, res, next) => {
  * @access  Private
  */
 export const updateUserProfile = async (req, res, next) => {
+  const { username, name, bio, image } = req.body;
+  let userSaved = false;
   try {
-    const { username, name, bio } = req.body;
     const userId = req.user._id;
 
     if (
-      !req.file &&
+      !image &&
       username === undefined &&
       name === undefined &&
       bio === undefined
@@ -283,32 +288,48 @@ export const updateUserProfile = async (req, res, next) => {
       user.bio = bio;
     }
 
-    // Handle profile picture update if file uploaded
-    if (req.file) {
-      // Delete old image from Cloudinary if exists
-      if (user.profilePicId) {
-        await cloudinary.uploader.destroy(user.profilePicId);
-      }
+    // Save old profile picture publicId for cleanup later
+    const oldProfilePicId = user.profilePic?.publicId;
 
-      // Save new image info
-      user.profilePic = req.file.path;
-      user.profilePicId = req.file.filename;
+    // Update profile picture
+    if (image) {
+      user.profilePic = image;
     }
 
     // Save updated user document
     await user.save();
+
+    userSaved = true;
+
+    // Delete old image from Cloudinary if exists
+    if (oldProfilePicId) {
+      const [result] = await Promise.allSettled([
+        cloudinary.uploader.destroy(oldProfilePicId),
+      ]);
+
+      if (result.status === "rejected") {
+        console.error(
+          `Failed to delete old profile picture: ${oldProfilePicId}`,
+          result.reason,
+        );
+      }
+    }
 
     // Prepare response data
     const responseData = {
       username: user.username,
       name: user.name,
       bio: user.bio,
-      profilePic: user.profilePic || null,
+      profilePic: user.profilePic.url || null,
     };
 
     // Send success response
     sendResponse(res, 200, "Profile updated successfully", responseData);
   } catch (err) {
+    // Remove newly uploaded image if database update failed
+    if (!userSaved && image?.publicId) {
+      await Promise.allSettled([cloudinary.uploader.destroy(image.publicId)]);
+    }
     console.error("[userController][updateUserProfile] Error:", err);
     next(err);
   }
@@ -487,11 +508,12 @@ export const toggleFollowUser = async (req, res, next) => {
     const currentUserId = req.user._id;
     const { userId } = req.params;
 
-    // Prevent self-follow
+    // Prevent users from following themselves
     if (currentUserId.toString() === userId) {
       return next(new AppError("You cannot follow yourself", 400));
     }
 
+    // Fetch both users concurrently
     const [currentUser, targetUser] = await Promise.all([
       User.findById(currentUserId),
       User.findById(userId),
@@ -500,20 +522,25 @@ export const toggleFollowUser = async (req, res, next) => {
       return next(new AppError("User not found", 404));
     }
 
+    // Check whether the current user already follows the target user
     const isFollowing = currentUser.following.some((id) =>
       id.equals(targetUser._id),
     );
 
     if (isFollowing) {
+      // Unfollow: remove each user from the other's relationship list
       currentUser.following.pull(targetUser._id);
       targetUser.followers.pull(currentUser._id);
     } else {
+      // Follow: add each user to the other's relationship list
       currentUser.following.push(targetUser._id);
       targetUser.followers.push(currentUser._id);
     }
 
+    // Save both users concurrently
     await Promise.all([currentUser.save(), targetUser.save()]);
 
+    // Return the updated follow state and follower count
     sendResponse(
       res,
       200,
