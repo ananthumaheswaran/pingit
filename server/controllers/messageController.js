@@ -8,9 +8,8 @@ import { sendResponse } from "../utils/responseHelper.js";
  */
 export const sendMessage = async (req, res, next) => {
   try {
-    const senderId = req.user.id;
-    const { recipientId, text } = req.body;
-    const image = req.file?.path;
+    const senderId = req.user._id;
+    const { recipientId, text, image } = req.body;
 
     // Call service
     const message = await messageService.saveMessage({
@@ -36,7 +35,7 @@ export const markAsRead = async (req, res, next) => {
     const { messageId } = req.params;
     const message = await messageService.markMessageRead({
       messageId,
-      readerId: req.user.id,
+      readerId: req.user._id,
     });
 
     sendResponse(res, 200, "Message marked as read.", { message });
@@ -52,18 +51,15 @@ export const markAsRead = async (req, res, next) => {
  */
 export const getConversation = async (req, res, next) => {
   try {
-    const userA = req.user.id; // current user
-    const { userB } = req.params;
-    const { page = 1, limit = 20 } = req.query;
-
-    const pageNum = parseInt(page) || 1;
-    const limitNum = parseInt(limit) || 20;
+    const currentUserId = req.user._id; // current user
+    const { recipientId } = req.params;
+    const { page, limit } = req.query;
 
     const { messages, hasMore } = await messageService.getConversation(
-      userA,
-      userB,
-      pageNum,
-      limitNum,
+      currentUserId,
+      recipientId,
+      page,
+      limit,
     );
 
     sendResponse(res, 200, "Conversation fetched successfully.", {
