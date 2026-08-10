@@ -31,13 +31,14 @@ const userSchema = new mongoose.Schema(
       select: false,
     },
     profilePic: {
-      type: String,
-      default: "", // Store image URL from Cloudinary
-    },
-
-    profilePicId: {
-      type: String,
-      default: "",
+      url: {
+        type: String,
+        default: "",
+      },
+      publicId: {
+        type: String,
+        default: "",
+      },
     },
 
     bio: {
