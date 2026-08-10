@@ -33,6 +33,5 @@ export const globalLimiter = createLimiter({
   keyGenerator: (req) => req.ip,
 });
 
-// Messaging limiter & Media upload limiter — uses authenticated user ID when available.
+// Messaging limiter — uses authenticated user ID when available.
 export const messageLimiter = createLimiter(RATE_LIMITS.MESSAGE);
-export const mediaMessageLimiter = createLimiter(RATE_LIMITS.MEDIA_MESSAGE);
