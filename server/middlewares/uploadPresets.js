@@ -24,3 +24,15 @@ export const postImageUpload = getUploadMiddleware({
   fieldName: "images",
   maxCount: 5,
 });
+
+// Preset for message image uploads
+export const messageImageUpload = getUploadMiddleware({
+  folder: "pingit/message_images",
+  transformation: [
+    { width: 1200, crop: "limit" },
+    { quality: "auto:eco" },
+    { fetch_format: "auto" },
+  ],
+  mode: "single",
+  fieldName: "image",
+});
