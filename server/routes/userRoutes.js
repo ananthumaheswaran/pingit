@@ -12,6 +12,7 @@ import {
   changeEmail,
   deleteAccount,
   deactivateAccount,
+  toggleFollowUser,
 } from "../controllers/userController.js";
 
 import {
@@ -20,8 +21,11 @@ import {
   changePasswordSchema,
   changeEmailSchema,
   confirmPasswordSchema,
-  updateProfileSchema,
-} from "../validators/userValidation.js";
+  updateUserProfileSchema,
+  searchUsersSchema,
+  getFollowListSchema,
+  userIdSchema,
+} from "../validations/userValidation.js";
 
 import { validate } from "../middlewares/validate.js"; //  Validates req.body against Joi schema
 import { protect } from "../middlewares/authMiddleware.js"; //  Verifies JWT token and attaches user to req
@@ -42,7 +46,7 @@ router.post(
   "/register",
   registerLimiter,
   validate(registerSchema),
-  registerUser
+  registerUser,
 );
 
 /**
@@ -57,19 +61,20 @@ router.post("/login", loginLimiter, validate(loginSchema), loginUser);
 
 /**
  * @route   POST /api/users/logout
- * @desc    Log out user (frontend deletes token)
+ * @desc    Log out the authenticated user (client removes the JWT)
  * @access  Public
  */
 router.post("/logout", logoutUser);
 
 /**
- * @route   GET /api/users/search?username=
+ * @route   GET /api/users/search?search=
  * @desc    Search users by partial username match
  * @access  Private
  * @middleware
  *    - protect: ensures user is authenticated
+ *    - validate(searchUsersSchema): validates search query
  */
-router.get("/search", protect, searchUsers);
+router.get("/search", protect, validate(searchUsersSchema), searchUsers);
 
 /**
  * @route   GET /api/users/:userId
@@ -77,8 +82,9 @@ router.get("/search", protect, searchUsers);
  * @access  Private
  * @middleware
  *    - protect: ensures user is authenticated
+ *    - validate(userIdSchema): validates userId parameter
  */
-router.get("/:userId", protect, getUserProfile);
+router.get("/:userId", protect, validate(userIdSchema), getUserProfile);
 
 /**
  * @route   GET /api/users/:userId/:type
@@ -86,8 +92,14 @@ router.get("/:userId", protect, getUserProfile);
  * @access  Private
  * @middleware
  *    - protect: ensures user is authenticated
+ *    - validate(getFollowListSchema): validates userId and type parameters
  */
-router.get("/:userId/:type", protect, getFollowList);
+router.get(
+  "/:userId/:type",
+  protect,
+  validate(getFollowListSchema),
+  getFollowList,
+);
 
 /**
  * @route   GET /api/users/me/settings
@@ -100,17 +112,19 @@ router.get("/me/settings", protect, getUserSettings);
 
 /**
  * @route   PATCH /api/users/me/settings/profile/update
- * @desc    Update profile: username, name, bio, profilePic
+ * @desc    Update username, name, bio and profile picture
  * @access  Private
  * @middleware
  *    - protect: ensures user is authenticated
+ *    - profilePicUpload: uploads profile picture to Cloudinary (if provided)
+ *    - validate(updateUserProfileSchema): validates profile update fields
  */
 router.patch(
   "/me/settings/profile/update",
   protect,
   profilePicUpload,
-  validate(updateProfileSchema),
-  updateUserProfile
+  validate(updateUserProfileSchema),
+  updateUserProfile,
 );
 
 /**
@@ -125,7 +139,7 @@ router.patch(
   "/me/settings/security/change-email",
   protect,
   validate(changeEmailSchema),
-  changeEmail
+  changeEmail,
 );
 
 /**
@@ -140,7 +154,7 @@ router.patch(
   "/me/settings/security/change-password",
   protect,
   validate(changePasswordSchema),
-  changePassword
+  changePassword,
 );
 
 /**
@@ -155,7 +169,7 @@ router.patch(
   "/me/settings/account/deactivate",
   protect,
   validate(confirmPasswordSchema),
-  deactivateAccount
+  deactivateAccount,
 );
 
 /**
@@ -170,7 +184,22 @@ router.delete(
   "/me/settings/account/delete",
   protect,
   validate(confirmPasswordSchema),
-  deleteAccount
+  deleteAccount,
+);
+
+/**
+ * @route   PATCH /api/users/:userId/follow
+ * @desc    Toggle follow or unfollow a user
+ * @access  Private
+ * @middleware
+ * - protect: ensures user is authenticated
+ * - validate(userIdSchema): validates userId parameter
+ */
+router.patch(
+  "/:userId/follow",
+  protect,
+  validate(userIdSchema),
+  toggleFollowUser,
 );
 
 export default router;
