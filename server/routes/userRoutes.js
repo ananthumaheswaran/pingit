@@ -77,31 +77,6 @@ router.post("/logout", logoutUser);
 router.get("/search", protect, validate(searchUsersSchema), searchUsers);
 
 /**
- * @route   GET /api/users/:userId
- * @desc    Get another user's public profile and their posts
- * @access  Private
- * @middleware
- *    - protect: ensures user is authenticated
- *    - validate(userIdSchema): validates userId parameter
- */
-router.get("/:userId", protect, validate(userIdSchema), getUserProfile);
-
-/**
- * @route   GET /api/users/:userId/:type
- * @desc    Get a user's followers or following list
- * @access  Private
- * @middleware
- *    - protect: ensures user is authenticated
- *    - validate(getFollowListSchema): validates userId and type parameters
- */
-router.get(
-  "/:userId/:type",
-  protect,
-  validate(getFollowListSchema),
-  getFollowList,
-);
-
-/**
  * @route   GET /api/users/me/settings
  * @desc    Fetch current user's basic account settings
  * @access  Private
@@ -185,6 +160,31 @@ router.delete(
   protect,
   validate(confirmPasswordSchema),
   deleteAccount,
+);
+
+/**
+ * @route   GET /api/users/:userId
+ * @desc    Get another user's public profile and their posts
+ * @access  Private
+ * @middleware
+ *    - protect: ensures user is authenticated
+ *    - validate(userIdSchema): validates userId parameter
+ */
+router.get("/:userId", protect, validate(userIdSchema), getUserProfile);
+
+/**
+ * @route   GET /api/users/:userId/:type
+ * @desc    Get a user's followers or following list
+ * @access  Private
+ * @middleware
+ *    - protect: ensures user is authenticated
+ *    - validate(getFollowListSchema): validates userId and type parameters
+ */
+router.get(
+  "/:userId/:type",
+  protect,
+  validate(getFollowListSchema),
+  getFollowList,
 );
 
 /**
